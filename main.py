@@ -1,91 +1,96 @@
-from flask import Flask, jsonify, render_template_string
+import os
+import time
+import threading
+import requests
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-HTML = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Aviator Analyzer</title>
-    <style>
-        body {
-            background: #101820;
-            color: white;
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 25px;
-        }
-        .box {
-            background: #1c2b36;
-            padding: 25px;
-            border-radius: 15px;
-            max-width: 400px;
-            margin: 30px auto;
-        }
-        input, button {
-            padding: 12px;
-            margin: 8px;
-            border-radius: 8px;
-            border: none;
-            font-size: 17px;
-        }
-        button {
-            background: #e63946;
-            color: white;
-            cursor: pointer;
-        }
-        #result {
-            font-size: 22px;
-            color: #ffd166;
-            margin-top: 20px;
-        }
-    </style>
-</head>
-<body>
-    <h1>✈️ AVIATOR</h1>
-    <div class="box">
-        <h3>محلل نتائج اللعبة</h3>
-        <p>أدخل المضاعفات السابقة، مفصولة بفواصل</p>
-        <input id="history" placeholder="1.2, 2.5, 1.1, 4.3">
-        <br>
-        <button onclick="analyze()">تحليل النتائج</button>
-        <div id="result"></div>
-        <p>التحليل لا يضمن التنبؤ بالجولة التالية.</p>
-    </div>
-    <script>
-        function analyze() {
-            const values = document.getElementById('history')
-                .value.split(',')
-                .map(x => Number(x.trim()))
-                .filter(x => Number.isFinite(x) && x >= 1);
-
-            const result = document.getElementById('result');
-
-            if (values.length < 3) {
-                result.textContent = 'أدخل 3 مضاعفات صحيحة على الأقل.';
-                return;
-            }
-
-            const average = values.reduce((a, b) => a + b, 0)
-                / values.length;
-
-            result.textContent =
-                'متوسط النتائج السابقة: ' + average.toFixed(2) + 'x';
-        }
-    </script>
-</body>
-</html>
-"""
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 @app.route("/")
 def home():
-    return render_template_string(HTML)
+    return """
+    <html lang="ar" dir="rtl">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <body style="background:#101820;color:white;text-align:center;
+    font-family:Arial;padding:30px">
+    <h1>✈️ AVIATOR</h1>
+    <p>الموقع يعمل بنجاح</p>
+    <p>تحليل النتائج السابقة فقط، وليس التنبؤ بالجولات القادمة.</p>
+    </body>
+    </html>
+    """
 
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
 
+def telegram_bot():
+    if not TOKEN:
+        print("TELEGRAM_BOT_TOKEN is missing")
+        return
+
+    offset = 0
+
+    while True:
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{TOKEN}/getUpdates",
+                params={"offset": offset, "timeout": 25},
+                timeout=35
+            )
+            data = response.json()
+
+            if not data.get("ok"):
+                time.sleep(5)
+                continue
+
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+
+                message = update.get("message", {})
+                chat = message.get("chat", {})
+                chat_id = chat.get("id")
+                text = message.get("text", "").strip()
+
+                if not chat_id or not text:
+                    continue
+
+                if text == "/start":
+                    reply = (
+                        "أهلًا بك في بوت AVIATOR ✈️\n\n"
+                        "البوت يعمل الآن.\n"
+                        "أرسل /help لمعرفة الأوامر."
+                    )
+                elif text == "/help":
+                    reply = (
+                        "الأوامر المتاحة:\n"
+                        "/start - تشغيل البوت\n"
+                        "/site - رابط الموقع\n"
+                        "/help - المساعدة\n\n"
+                        "لا يمكن ضمان نتيجة الجولة القادمة."
+                    )
+                elif text == "/site":
+                    reply = "رابط الموقع:\nhttps://aviator-yatb.onrender.com"
+                else:
+                    reply = "أرسل /help لرؤية الأوامر المتاحة."
+
+                requests.post(
+                    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": reply},
+                    timeout=10
+                )
+
+        except Exception as error:
+            print("Telegram error:", error)
+            time.sleep(5)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    threading.Thread(
+        target=telegram_bot,
+        daemon=True
+    ).start()
+
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
